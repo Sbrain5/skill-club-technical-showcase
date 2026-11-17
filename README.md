@@ -98,6 +98,8 @@ The service compares checkpoint hashes and final result data to identify disagre
 
 **Important distinction:** This is a match-consistency verification system, not a fully authoritative game server or comprehensive anti-cheat solution.
 
+[Read the Arbiter Backend Technical Deep Dive](docs/arbiter-backend.md)
+
 ## 4. Developer & Debugging Tools
 
 To support implementation and testing, I created several in-game tools:
