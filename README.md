@@ -63,6 +63,8 @@ The `GameSimulation` component manages the simulation history and rollback logic
 
 A key architectural decision was keeping the simulation state separate from Unity's visual presentation.
 
+[Read the Rollback Netcode Technical Deep Dive](docs/rollback-netcode.md)
+
 ## 2. Multiplayer Integration
 
 The online flow uses **PurrNet**, **Steamworks**, and Steam networking transport.
