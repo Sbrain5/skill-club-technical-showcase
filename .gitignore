@@ -136,3 +136,7 @@ crashlytics-build.properties
 
 # Auto-generated cache in Assets folder
 /[Aa]ssets/[Ss]ceneDependencyCache*
+
+# Large 3D mesh hosted in GitHub Releases
+/Assets/Programming/RafaeloSavvakis/Art/Meshes/SM_Door.fbx
+/Assets/Programming/RafaeloSavvakis/Art/Meshes/SM_Door.fbx.meta
