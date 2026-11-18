@@ -1,0 +1,365 @@
+# this is a pipeline which builds and deploys the arbiter that always goes to vps so we can test even if my pc is closed,
+# it builds the unity game and it uploads it to steam only if DO_STEAM is true
+# staging is the unstable branch and it is automatically set live, main is the default branch and live must be done manually
+
+name: $(Date:yyyyMMdd).$(Rev:r)
+
+trigger:
+  branches:
+    include:
+      - main
+      - staging
+
+variables:
+  # vps path for staging arbiter
+  - name: ARBITER_PATH_STAGING
+    value: '/srv/skillclub-arbiter-staging'
+
+  # vps path for main arbiter
+  - name: ARBITER_PATH_MAIN
+    value: '/srv/skillclub-arbiter-main'
+
+  # project path for abiter
+  - name: ARBITER_PROJECT
+    value: '$(Build.SourcesDirectory)/ArbiterServer/ArbiterServer.csproj'
+
+  # steam settings
+  - group: steam-config
+  - group: steam-secrets
+
+  # this decides if the game build and steam upload will run
+  - name: DO_STEAM
+    value: 'true'
+
+  # unity path on pc
+  - name: UNITY_EXE_PC
+    value: 'E:\SetupFiles\Unity\Hub\Editor\6000.0.55f1\Editor\Unity.exe'
+
+  # unity path on laptop
+  - name: UNITY_EXE_LAPTOP
+    value: 'C:\Program Files\Unity\Hub\Editor\6000.0.55f1\Editor\Unity.exe'
+
+  # name of the uploaded windows build
+  - name: GAME_ARTIFACT
+    value: 'skillclub-win64'
+
+stages:
+
+  # arbiter
+
+  - stage: arbiter
+    displayName: "Arbiter"
+    jobs:
+      - job: build_and_deploy_arbiter
+        displayName: "build and deploy"
+        pool:
+          name: 'skillclub-vps'
+        workspace:
+          clean: all
+        steps:
+          - checkout: self
+            fetchDepth: 1
+            fetchTags: false
+            clean: true
+
+          - script: |
+              set -euo pipefail
+
+              echo "building arbiter..."
+              
+              # create build version file
+              cat > "$(Build.SourcesDirectory)/ArbiterServer/BuildInfo.cs" <<EOF
+              public static class BuildInfo
+              {
+                public const string Version = "$(Build.BuildNumber)";
+              }
+              EOF
+
+              # restore nuget packages before publish
+              dotnet restore "$(ARBITER_PROJECT)"
+
+              # publish for linux because the arbiter runs on the vps
+              dotnet publish "$(ARBITER_PROJECT)" \
+                -c Release \
+                -r linux-x64 \
+                --self-contained false \
+                -o "$(Build.ArtifactStagingDirectory)/arbiter_out"
+            displayName: "build arbiter"
+
+          - script: |
+              set -euo pipefail
+
+              # choose folder depending on branch
+              if [ "$(Build.SourceBranchName)" = "staging" ]; then
+                TARGET_DIR="$(ARBITER_PATH_STAGING)"
+                SERVICE_NAME="skillclub-arbiter-staging"
+              else
+                TARGET_DIR="$(ARBITER_PATH_MAIN)"
+                SERVICE_NAME="skillclub-arbiter-main"
+              fi
+
+              echo "target dir: $TARGET_DIR"
+              echo "service: $SERVICE_NAME"
+
+              # make sure target folder exists
+              mkdir -p "$TARGET_DIR"
+
+              # copy the new published files to the server folder
+              rsync -a --delete "$(Build.ArtifactStagingDirectory)/arbiter_out/" "$TARGET_DIR/"
+
+              # restart the systemd service so the new build starts running
+              sudo systemctl restart "$SERVICE_NAME"
+
+              # print service status in case we need to see quickly if it started
+              sudo systemctl --no-pager status "$SERVICE_NAME" || true
+            displayName: "deploy arbiter"
+
+  # windows build
+
+  - stage: windows_build
+    displayName: "Windows build"
+    dependsOn: arbiter
+    condition: and(succeeded(), eq(variables['DO_STEAM'], 'true'))
+    jobs:
+      - job: unity_build
+        displayName: "unity win64"
+        timeoutInMinutes: 310
+        pool:
+          name: skillclub-win-build
+        workspace:
+          clean: none
+        steps:
+          # get the repo files for the unity project
+          - checkout: self
+            fetchDepth: 1
+            clean: false
+
+          - powershell: |
+              $ErrorActionPreference = "Stop"
+
+              # try pc path first and then laptop
+              $unity = ""
+
+              if (Test-Path "$(UNITY_EXE_PC)")
+              {
+                $unity = "$(UNITY_EXE_PC)"
+              }
+              elseif (Test-Path "$(UNITY_EXE_LAPTOP)")
+              {
+                $unity = "$(UNITY_EXE_LAPTOP)"
+              }
+              else
+              {
+                throw "Unity not found"
+              }
+
+              Write-Host "Using Unity: $unity"
+
+              # windows build output folder
+              $outDir = "$(Build.ArtifactStagingDirectory)\Win64"
+
+              # unity log file so we can inspect build problems later
+              $logFile = "$(Build.ArtifactStagingDirectory)\unity.log"
+
+              New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+              New-Item -ItemType File -Force -Path $logFile | Out-Null
+
+              # this runs the static build method inside the unity project
+              $args = @("-batchmode", "-nographics", "-quit", "-projectPath", "$(Build.SourcesDirectory)", "-executeMethod", "CIBuild.BuildWin64", "-buildPath", $outDir, "-logFile", $logFile)
+
+              $proc = Start-Process `
+                -FilePath $unity `
+                -ArgumentList $args `
+                -PassThru `
+                -NoNewWindow `
+                -WorkingDirectory "$(Build.SourcesDirectory)"
+
+              # 5 hours max and if unity hangs too much we stop it
+              if (-not $proc.WaitForExit(18000000))
+              {
+                try
+                {
+                  taskkill /PID $proc.Id /T /F | Out-Null
+                }
+                catch
+                {
+                }
+
+                Start-Sleep -Seconds 10
+                throw "Unity build timed out"
+              }
+
+              $proc.Refresh()
+              $exitCode = $proc.ExitCode
+
+              # unity sometimes gives null here and therefore we also check the log for success text
+              if ($null -eq $exitCode)
+              {
+                $exitCode = 1
+
+                if (Test-Path $logFile)
+                {
+                  $tail = Get-Content $logFile -Tail 200
+                  if (($tail -match "return code 0") -and ($tail -match "Build Finished, Result: Success"))
+                  {
+                    $exitCode = 0
+                  }
+                }
+              }
+
+              # print last part of the log because it helps when debugging failed builds
+              if (Test-Path $logFile)
+              {
+                Write-Host "last log lines:"
+                Get-Content $logFile -Tail 200
+              }
+
+              if ($exitCode -ne 0)
+              {
+                throw "Unity build failed"
+              }
+            displayName: "build game"
+
+          # upload the unity log even if the build fails
+          - task: PublishPipelineArtifact@1
+            inputs:
+              targetPath: '$(Build.ArtifactStagingDirectory)\unity.log'
+              artifact: 'unity-log'
+            condition: always()
+            displayName: "upload unity log"
+
+          # upload the actual windows build so the next stage can download it
+          - task: PublishPipelineArtifact@1
+            inputs:
+              targetPath: '$(Build.ArtifactStagingDirectory)\Win64'
+              artifact: '$(GAME_ARTIFACT)'
+            displayName: "upload win64 build"
+
+  # steam
+
+  - stage: steam
+    displayName: "Steam"
+    dependsOn: windows_build
+    condition: and(succeeded(), eq(variables['DO_STEAM'], 'true'))
+    jobs:
+      - job: steam_upload
+        displayName: "upload"
+        pool:
+          name: skillclub-vps
+        workspace:
+          clean: all
+        steps:
+          - checkout: none
+
+          # download the windows build artifact from the previous stage
+          - task: DownloadPipelineArtifact@2
+            inputs:
+              artifact: '$(GAME_ARTIFACT)'
+              path: '$(Pipeline.Workspace)/game_content'
+            displayName: "grab build"
+
+          - script: |
+              set -euo pipefail
+
+              WORK_DIR="$(Pipeline.Workspace)/steam-build"
+              CONTENT_DIR="$(Pipeline.Workspace)/game_content"
+              DEPOT_ID="${STEAM_DEPOT_IDS%%,*}"
+
+              # clean old steam build files from this run folder
+              rm -rf "$WORK_DIR"
+              
+              # folders used by steamcmd build files
+              mkdir -p "$WORK_DIR/scripts" "$WORK_DIR/output"
+
+              # choose steam branch from git branch
+              if [ "$(Build.SourceBranchName)" = "staging" ]; then
+                BRANCH_DESC="$(STEAM_BRANCH_STAGING)"
+                SETLIVE="$(STEAM_BRANCH_STAGING)"
+              elif [ "$(Build.SourceBranchName)" = "main" ]; then
+                BRANCH_DESC="$(STEAM_BRANCH_DEFAULT)"
+                SETLIVE=""
+              else
+                echo "wrong branch for steam upload"
+                exit 1
+              fi
+
+              # depot file describes which files go inside this depot
+              cat > "$WORK_DIR/scripts/depot_build_${DEPOT_ID}.vdf" <<EOF
+              "DepotBuildConfig"
+              {
+                "DepotID" "${DEPOT_ID}"
+                "ContentRoot" "."
+
+                "FileMapping"
+                {
+                  "LocalPath" "*"
+                  "DepotPath" "."
+                  "recursive" "1"
+                }
+              }
+              EOF
+
+              # app build file tells steam which app to upload and which depot file to use
+              {
+                echo '"AppBuild"'
+                echo '{'
+                echo "  \"AppID\" \"$(STEAM_APP_ID)\""
+                echo "  \"Desc\" \"CI build $(Build.BuildNumber) -> ${BRANCH_DESC}\""
+                echo '  "BuildOutput" "../output/"'
+                echo "  \"ContentRoot\" \"${CONTENT_DIR}\""
+                echo '  "Preview" "0"'
+
+                # only staging gets auto SetLive
+                if [ -n "$SETLIVE" ]; then
+                  echo "  \"SetLive\" \"${SETLIVE}\""
+                fi
+
+                echo '  "Depots"'
+                echo '  {'
+                echo "    \"${DEPOT_ID}\" \"depot_build_${DEPOT_ID}.vdf\""
+                echo '  }'
+                echo '}'
+              } > "$WORK_DIR/scripts/app_build_$(STEAM_APP_ID).vdf"
+
+              echo "vdf files ready"
+            displayName: "make steam files"
+
+          - script: |
+              set -euo pipefail
+
+              STEAMCMD_DIR="/home/azagent/steamcmd"
+              APP_VDF="$(Pipeline.Workspace)/steam-build/scripts/app_build_$(STEAM_APP_ID).vdf"
+
+              # stop immediately if steamcmd is not installed in the expected place
+              if [ ! -f "${STEAMCMD_DIR}/steamcmd.sh" ]; then
+                echo "steamcmd not found"
+                exit 1
+              fi
+
+              cd "$STEAMCMD_DIR"
+
+              # login to steam and run the app build file
+              ./steamcmd.sh \
+                +@NoPromptForPassword 1 \
+                +@ShutdownOnFailedCommand 1 \
+                +login "$STEAM_USERNAME" "$STEAM_PASSWORD" \
+                +run_app_build "$APP_VDF" \
+                +quit
+
+              echo "steam upload finished"
+              echo "if branch was main we still set live manually in steamworks"
+            env:
+              STEAM_USERNAME: $(STEAM_USERNAME)
+              STEAM_PASSWORD: $(STEAM_PASSWORD)
+            displayName: "steamcmd upload"
+            
+          - script: |
+              set -euo pipefail
+
+              rm -rf "$(Pipeline.Workspace)/game_content" "$(Pipeline.Workspace)/steam-build"
+
+              rm -rf /home/azagent/steamcmd/logs/* /home/azagent/steamcmd/steamapps/temp/* || true
+
+              df -h
+            condition: always()
+            displayName: "clean steam files"
