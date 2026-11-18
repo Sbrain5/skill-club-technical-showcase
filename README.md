@@ -11,6 +11,27 @@ My primary focus was building the multiplayer infrastructure, implementing a cus
 
 ---
 
+## Video Demonstrations
+
+Watch the custom multiplayer, rollback netcode, and backend debugging tools I developed for Skill Club.
+
+### Featured Technical Demos
+
+| Rollback Netcode Input Viewer | Arbiter Mismatch Detection |
+|:---:|:---:|
+| [![Rollback Netcode Input Viewer](https://img.youtube.com/vi/H-txEZ7GAmU/hqdefault.jpg)](https://youtu.be/H-txEZ7GAmU) | [![Arbiter Mismatch Detection](https://img.youtube.com/vi/1A-h0easEIE/hqdefault.jpg)](https://youtu.be/1A-h0easEIE) |
+| [Watch Rollback Input Viewer](https://youtu.be/H-txEZ7GAmU) | [Watch Arbiter Mismatch Detection](https://youtu.be/1A-h0easEIE) |
+
+### Additional Demonstrations
+
+- **[Network Latency & Rollback Testing](https://youtu.be/UjyOPIi2Rb4)** — Artificial network delay, ping monitoring, and rollback testing.
+- **[Arbiter Backend Log Viewer](https://youtu.be/bNKAj5oAxHw)** — Match sessions, checkpoint responses, and verification diagnostics.
+- **[In-Game Developer Tools Overview](https://youtu.be/QqpHVvJw9JQ)** — Centralized access to custom networking and backend debugging tools.
+
+**[Explore All Developer Tools & Technical Demonstrations](docs/developer-tools.md)**
+
+---
+
 ## My Role
 
 **Multiplayer & Backend Programmer — Stavros Savvakis**
