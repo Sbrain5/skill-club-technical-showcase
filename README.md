@@ -32,6 +32,16 @@ Watch the custom multiplayer, rollback netcode, and backend debugging tools I de
 
 ---
 
+## Selected Code Highlights
+
+Explore real C# implementation excerpts from my rollback netcode and ASP.NET Core match verification systems.
+
+The examples cover remote input prediction, incorrect prediction detection, delayed checkpoint reporting, and backend hash comparison.
+
+**[Explore Selected C# Code Highlights](docs/code-highlights.md)**
+
+---
+
 ## My Role
 
 **Multiplayer & Backend Programmer — Stavros Savvakis**
